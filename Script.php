@@ -161,7 +161,7 @@ function percent_rank_at($arr, $i, $win) {
   return 100.0 * ($cnt - 1) / max(1, $win - 1);
 }
 
-// Linear regression y at current bar over window (like Pine ta.linreg(x, len, 0))
+// Linear regression y at current bar over window
 function linreg_current($arr, $i, $win) {
   $start = $i - $win + 1;
   if ($start < 0) return null;
@@ -289,6 +289,21 @@ function mm_crop_clean(array $m, ?string $FROM, ?string $TO): array {
   for ($i=$s;$i<=$e;$i++) $clean[$keys[$i]]=$vals[$i];
   return $clean;
 }
+// === NEW: shift by whole weeks (positive = forward in time) ===
+function mm_shift_weeks(array $m, int $weeks): array {
+  if ($weeks === 0) return $m;
+  $out = [];
+  $sec = $weeks * 7 * 24 * 3600;
+  foreach ($m as $d=>$v) {
+    $t = strtotime($d);
+    if ($t === false) continue;
+    $d2 = date('Y-m-d', $t + $sec);
+    // keep native daily date (later we will month-end it in resampling/master building)
+    $out[$d2] = $v;
+  }
+  ksort($out);
+  return $out;
+}
 
 // ==================== FETCH FX (RapidAPI Yahoo, 1mo) ====================
 try {
@@ -324,8 +339,8 @@ try {
   }
 
   // Derive USD/GBP and USD/EUR by inversion
-  $usd_gbp = []; // USD/GBP = 1 / (GBP/USD)
-  $usd_eur = []; // USD/EUR = 1 / (EUR/USD)
+  $usd_gbp = [];
+  $usd_eur = [];
   foreach ($gbp_usd as $d => $v) { if ($v != 0.0) $usd_gbp[$d] = 1.0 / $v; }
   foreach ($eur_usd as $d => $v) { if ($v != 0.0) $usd_eur[$d] = 1.0 / $v; }
 
@@ -387,7 +402,7 @@ foreach ($dates as $d) {
   $out_index[] = $idx;
 }
 
-/* ======== Overlay input (GET add[]/ops[]/label[]) + labels for DB ======== */
+/* ======== Overlay input (GET add[]/ops[]/label[]/shift[]) + labels for DB ======== */
 $MM_ASSETS = [
   'Bitcoin-USD'             => 'Bitcoin USD',
   'eth_usd'                 => 'ETH USD',
@@ -401,9 +416,10 @@ $MM_ASSETS = [
   'silver_usd'              => 'Silver',
 ];
 
-$MM_add   = isset($_GET['add'])   ? (array)$_GET['add']   : [];
-$MM_ops   = isset($_GET['ops'])   ? (array)$_GET['ops']   : [];
-$MM_label = isset($_GET['label']) ? (array)$_GET['label'] : [];
+$MM_add    = isset($_GET['add'])    ? (array)$_GET['add']    : [];
+$MM_ops    = isset($_GET['ops'])    ? (array)$_GET['ops']    : [];
+$MM_label  = isset($_GET['label'])  ? (array)$_GET['label']  : [];
+$MM_shift  = isset($_GET['shift'])  ? array_map('intval', (array)$_GET['shift']) : []; // weeks, can be negative
 $MM_YF_INTERVAL = '1mo';
 
 /* ======== Gather raw overlay maps (native dates) ======== */
@@ -452,15 +468,27 @@ if (!empty($MM_add)) {
   if ($__mm) $__mm->close();
 }
 
-/* ======== Build MASTER month-end axis from composite + overlays ======== */
+/* ======== Build MASTER month-end axis from composite + overlays (with SHIFT applied) ======== */
 // Composite month-end keyed map
 $comp_map_native = [];
 for ($i=0; $i<count($out_dates); $i++) {
   $comp_map_native[ mm_month_end($out_dates[$i]) ] = $out_index[$i]; // last in month wins
 }
+
 $master_set = [];
 foreach (array_keys($comp_map_native) as $d) $master_set[$d] = true;
-foreach ($raw_maps as $rm) foreach ($rm as $d => $_) $master_set[ mm_month_end($d) ] = true;
+
+// Apply shifts to raw maps BEFORE determining master months
+$raw_maps_shifted = [];
+for ($i=0; $i<count($raw_maps); $i++) {
+  $shiftW = isset($MM_shift[$i]) ? max(-250, min(250, intval($MM_shift[$i]))) : 0;
+  $mShift = mm_shift_weeks($raw_maps[$i], $shiftW);
+  $raw_maps_shifted[] = $mShift;
+
+  // add shifted month-ends into master axis
+  foreach ($mShift as $d => $_) $master_set[ mm_month_end($d) ] = true;
+}
+
 $MASTER_MONTHS = array_keys($master_set);
 sort($MASTER_MONTHS);
 
@@ -592,40 +620,50 @@ for ($i=0; $i<$N; $i++) {
 $latestGauge = null;
 for ($i=$N-1; $i>=0; $i--) { if ($g_out[$i] !== null) { $latestGauge = $g_out[$i]; break; } }
 
-/* ======== Build overlay traces on MASTER axis (resample + transforms + crop) ======== */
+/* ======== Build overlay traces on MASTER axis (SHIFT -> resample -> transforms -> crop) ======== */
 $MM_traces = [];
 $MM_axes   = [];
 
 $left = false; $leftCount=0; $rightCount=0;
-for ($i=0; $i<count($raw_maps); $i++) {
+for ($i=0; $i<count($raw_maps_shifted); $i++) {
+  $m = $raw_maps_shifted[$i];
+
   // resample to MASTER, then ops, then crop
-  $m = mm_resample_monthly($raw_maps[$i], $MASTER_MONTHS);
+  $m = mm_resample_monthly($m, $MASTER_MONTHS);
   $m = mm_apply_ops($m, $MM_ops[$i] ?? '');
   $m = mm_crop_clean($m, $FROM, $TO);
   if (empty($m)) continue;
 
   $dates2 = array_keys($m);
   $vals2  = array_values($m);
+
   $yref   = 'y'.($i+2); // main composite is y
   $yaxis_layout_name = 'yaxis'.($i+2); // main composite is y
+
+  // Append shift to legend if non-zero
+  $shiftW = isset($MM_shift[$i]) ? max(-250, min(250, intval($MM_shift[$i]))) : 0;
+  $nameSuffix = ($MM_ops[$i]??'') ? " [".$MM_ops[$i]."]" : "";
+  if ($shiftW !== 0) {
+    $nameSuffix .= " (shift ".($shiftW>0?"+":"").$shiftW."w)";
+  }
 
   $MM_traces[] = [
     'x' => $dates2,
     'y' => $vals2,
     'type' => 'scatter',
     'mode' => 'lines',
-    'name' => $raw_names[$i].( ($MM_ops[$i]??'') ? " [".$MM_ops[$i]."]" : "" ),
+    'name' => $raw_names[$i].$nameSuffix,
     'yaxis' => $yref,
     'connectgaps' => true
   ];
 
   $side = $left ? 'left' : 'right';
   if ($side==='left') $leftCount++; else $rightCount++;
-  
+
   if($i > 0){
-  	$pos = ($side==='left') ? min(0.08*$leftCount, 0.45) : max(1.0 - 0.08*$rightCount, 0.55);
+    $pos = ($side==='left') ? min(0.08*$leftCount, 0.45) : max(1.0 - 0.08*$rightCount, 0.55);
   } else {
-  	$pos = 1;
+    $pos = 1;
   }
 
   $MM_axes[$yaxis_layout_name] = [
@@ -713,12 +751,13 @@ for ($i=0; $i<count($raw_maps); $i++) {
       </form>
     </div>
 
-    <!-- ===== Overlay Assets (simple dropdown / symbol + checkboxes) ===== -->
+    <!-- ===== Overlay Assets (with per-row SHIFT in weeks) ===== -->
     <div class="card" style="background:#0e1420; margin:8px 0 16px 0;">
       <h3>Assets Overlay → plotted on the MAIN chart</h3>
       <p class="muted">
-        Pick a DB table or enter a Yahoo symbol (via RapidAPI). Tick any transforms. You can add multiple rows; each gets its own y-axis.<br>
-        <span class="tag">log</span><span class="tag">inverse</span><span class="tag">zN</span><span class="tag">pct3</span><span class="tag">pct6</span><span class="tag">pct12</span>
+        Pick a DB table or enter a Yahoo symbol (via RapidAPI). Tick transforms. You can add multiple rows; each gets its own y-axis.
+        Use <b>Shift (weeks)</b> to move a series forward/backward (−250..+250). Positive = forward.
+        <br><span class="tag">log</span><span class="tag">inverse</span><span class="tag">zN</span><span class="tag">pct3</span><span class="tag">pct6</span><span class="tag">pct12</span>
       </p>
 
       <form id="mm_cfg" method="GET" class="controls" onsubmit="return mm_buildAndSubmitSimple();">
@@ -733,13 +772,14 @@ for ($i=0; $i<count($raw_maps); $i++) {
             $src  = $MM_add[$r]   ?? '';
             $opsS = $MM_ops[$r]   ?? '';
             $lbl  = $MM_label[$r] ?? '';
+            $shW  = isset($MM_shift[$r]) ? max(-250, min(250, intval($MM_shift[$r]))) : 0;
             $isY  = strncasecmp($src,'YAHOO:',6)===0;
             $sym  = $isY ? substr($src,6) : '';
             $isDB = (!$isY && $src!=='' && isset($MM_ASSETS[$src]));
             $has  = function($k) use($opsS){ return (strpos($opsS,$k)!==false); };
             $zwin = 36; if (preg_match('/z(\d+)/',$opsS,$m)) $zwin=max(3,intval($m[1]));
         ?>
-          <div class="rowcard" data-idx="<?= $r ?>" style="display:grid;grid-template-columns:260px 220px 1fr 200px 60px;gap:10px;align-items:end;">
+          <div class="rowcard" data-idx="<?= $r ?>" style="display:grid;grid-template-columns:220px 200px 1fr 160px 160px 60px;gap:10px;align-items:end;">
             <div>
               <div><b>Source</b></div>
               <select class="mm_src" style="width:100%;" onchange="mm_toggleYahooSimple(this);">
@@ -767,6 +807,10 @@ for ($i=0; $i<count($raw_maps); $i++) {
               <label style="margin-left:10px;"><input type="checkbox" class="mm_tf_pct3"  <?= $has('pct3')?'checked':'' ?>> pct3</label>
               <label><input type="checkbox" class="mm_tf_pct6"  <?= $has('pct6')?'checked':'' ?>> pct6</label>
               <label><input type="checkbox" class="mm_tf_pct12" <?= $has('pct12')?'checked':'' ?>> pct12</label>
+            </div>
+            <div>
+              <div><b>Shift (weeks)</b></div>
+              <input type="number" class="mm_shift" value="<?= htmlspecialchars($shW) ?>" min="-250" max="250" step="1" style="width:100%;" />
             </div>
             <div>
               <div><b>Legend label</b></div>
@@ -839,18 +883,18 @@ const extras = [];
 if (gDates.length>1) { extras.push(hline(25), hline(50), hline(75)); }
 Plotly.newPlot('gaugeHistory', [gaugeLine, ...extras], layoutGaugeHist, {displaylogo:false, responsive:true});
 
-/* ===== Simple overlay UI (dropdown/symbol + checkboxes) ===== */
+/* ===== Simple overlay UI (dropdown/symbol + checkboxes + shift) ===== */
 const MM_DB_SERIES = <?= json_encode($MM_ASSETS, JSON_UNESCAPED_SLASHES) ?>;
 
 function mm_rowSimpleTpl(idx){
   const dbOpts = Object.entries(MM_DB_SERIES).map(([tbl,label])=>`<option value="${tbl}">${label}</option>`).join('');
   return `
-  <div class="rowcard" data-idx="${idx}" style="display:grid;grid-template-columns:260px 220px 1fr 200px 60px;gap:10px;align-items:end;">
+  <div class="rowcard" data-idx="\${idx}" style="display:grid;grid-template-columns:220px 200px 1fr 160px 160px 60px;gap:10px;align-items:end;">
     <div>
       <div><b>Source</b></div>
       <select class="mm_src" onchange="mm_toggleYahooSimple(this);" style="width:100%;">
         <option value="" selected disabled>Choose…</option>
-        <optgroup label="DB tables">${dbOpts}</optgroup>
+        <optgroup label="DB tables">\${dbOpts}</optgroup>
         <optgroup label="Yahoo via RapidAPI"><option value="YAHOO">Type symbol below…</option></optgroup>
       </select>
     </div>
@@ -866,7 +910,11 @@ function mm_rowSimpleTpl(idx){
       win <input type="number" class="mm_zwin" value="36" min="3" step="1" style="width:70px;" disabled>
       <label style="margin-left:10px;"><input type="checkbox" class="mm_tf_pct3"> pct3</label>
       <label><input type="checkbox" class="mm_tf_pct6"> pct6</label>
-      <label><input type="checkbox" class="mm_tf_pct12" checked> pct12</label>
+      <label><input type="checkbox" class="mm_tf_pct12"> pct12</label>
+    </div>
+    <div>
+      <div><b>Shift (weeks)</b></div>
+      <input type="number" class="mm_shift" value="0" min="-250" max="250" step="1" style="width:100%;" />
     </div>
     <div>
       <div><b>Legend label</b></div>
@@ -891,7 +939,7 @@ function mm_addRowSimple(){ document.getElementById('mm_rows').insertAdjacentHTM
 function mm_buildAndSubmitSimple(){
   const form = document.getElementById('mm_cfg');
   // purge old hidden fields if any
-  Array.from(form.querySelectorAll('input[name="add[]"],input[name="ops[]"],input[name="label[]"]')).forEach(n=>n.remove());
+  Array.from(form.querySelectorAll('input[name="add[]"],input[name="ops[]"],input[name="label[]"],input[name="shift[]"]')).forEach(n=>n.remove());
 
   const rows = document.querySelectorAll('#mm_rows .rowcard');
   if (rows.length===0){ alert('Add at least one asset'); return false; }
@@ -920,9 +968,12 @@ function mm_buildAndSubmitSimple(){
     if (row.querySelector('.mm_tf_pct6')?.checked)  ops.push('pct6');
     if (row.querySelector('.mm_tf_pct12')?.checked) ops.push('pct12');
 
+    const shiftWeeks = Math.max(-250, Math.min(250, parseInt(row.querySelector('.mm_shift')?.value || '0', 10)));
+
     form.insertAdjacentHTML('beforeend', `<input type="hidden" name="add[]" value="${mm_html(addVal)}">`);
     form.insertAdjacentHTML('beforeend', `<input type="hidden" name="ops[]" value="${mm_html(ops.join(','))}">`);
     form.insertAdjacentHTML('beforeend', `<input type="hidden" name="label[]" value="${mm_html(lbl)}">`);
+    form.insertAdjacentHTML('beforeend', `<input type="hidden" name="shift[]" value="${shiftWeeks}">`);
   });
 
   // submit GET back to same page
