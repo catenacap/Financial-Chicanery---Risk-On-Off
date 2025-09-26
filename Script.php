@@ -596,7 +596,7 @@ for ($i=$N-1; $i>=0; $i--) { if ($g_out[$i] !== null) { $latestGauge = $g_out[$i
 $MM_traces = [];
 $MM_axes   = [];
 
-$left = true; $leftCount=0; $rightCount=0;
+$left = false; $leftCount=0; $rightCount=0;
 for ($i=0; $i<count($raw_maps); $i++) {
   // resample to MASTER, then ops, then crop
   $m = mm_resample_monthly($raw_maps[$i], $MASTER_MONTHS);
@@ -607,6 +607,7 @@ for ($i=0; $i<count($raw_maps); $i++) {
   $dates2 = array_keys($m);
   $vals2  = array_values($m);
   $yref   = 'y'.($i+2); // main composite is y
+  $yaxis_layout_name = 'yaxis'.($i+2); // main composite is y
 
   $MM_traces[] = [
     'x' => $dates2,
@@ -620,9 +621,14 @@ for ($i=0; $i<count($raw_maps); $i++) {
 
   $side = $left ? 'left' : 'right';
   if ($side==='left') $leftCount++; else $rightCount++;
-  $pos = ($side==='left') ? min(0.08*$leftCount, 0.45) : max(1.0 - 0.08*$rightCount, 0.55);
+  
+  if($i > 0){
+  	$pos = ($side==='left') ? min(0.08*$leftCount, 0.45) : max(1.0 - 0.08*$rightCount, 0.55);
+  } else {
+  	$pos = 1;
+  }
 
-  $MM_axes[$yref] = [
+  $MM_axes[$yaxis_layout_name] = [
     'title' => $raw_names[$i],
     'gridcolor' => '#18202b',
     'zerolinecolor' => '#233043',
@@ -643,7 +649,8 @@ for ($i=0; $i<count($raw_maps); $i++) {
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <link href="https://fonts.googleapis.com/css?family=Nunito" rel="stylesheet" />
   <style>
-    body { background:#0b0f14; color:#e5e9f0; font-family: Nunito, system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, "Helvetica Neue", Arial, "Noto Sans"; margin:0; padding:16px;}
+    body { background:#0b0f14; color:#e5e9f0; font-family: Nunito, system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, "Helvetica Neue", Arial, "Noto Sans"; margin:0; padding:16px; font-size: 12px;}
+    h2, h3{margin-top: 0; margin-bottom: 0px;}
     .card {background:#11161d; border:1px solid #1f2937; border-radius:12px; padding:16px; box-shadow: 0 4px 20px rgba(0,0,0,0.35);}
     .controls { margin-bottom: 12px; display:flex; gap:10px; flex-wrap:wrap; align-items:center;}
     input[type="date"], input[type="text"], input[type="number"] { background:#0b0f14; color:#e5e9f0; border:1px solid #1f2937; border-radius:8px; padding:6px 10px; }
@@ -665,7 +672,7 @@ for ($i=0; $i<count($raw_maps); $i++) {
         <h2>Composite Index (Monthly)</h2>
         <div class="muted">Formula: ((USDJPY_term × (Crude×2)) / (USD/GBP × (USD/EUR×0.576) × (VIX×1e-6) × 24,000,000))</div>
       </div>
-      <div id="gauge" style="width:100%;height:140px;"></div>
+      <div id="gauge" style="width:100%;height:60px;"></div>
     </div>
 
     <div class="controls">
@@ -735,7 +742,7 @@ for ($i=0; $i<count($raw_maps); $i++) {
           <div class="rowcard" data-idx="<?= $r ?>" style="display:grid;grid-template-columns:260px 220px 1fr 200px 60px;gap:10px;align-items:end;">
             <div>
               <div><b>Source</b></div>
-              <select class="mm_src" style="width:100%;" onchange="mm_toggleYahooSimple(this); mm_buildAndSubmitSimple();">
+              <select class="mm_src" style="width:100%;" onchange="mm_toggleYahooSimple(this);">
                 <option value="" <?= ($src===''?'selected':'') ?> disabled>Choose…</option>
                 <optgroup label="DB tables">
                 <?php foreach ($MM_ASSETS as $tbl=>$label): ?>
@@ -749,21 +756,21 @@ for ($i=0; $i<count($raw_maps); $i++) {
             </div>
             <div>
               <div><b>Yahoo symbol</b></div>
-              <input type="text" class="mm_sym" placeholder="e.g., BTC-USD, ^GSPC" value="<?= htmlspecialchars($sym) ?>" style="width:100%; <?= $isY?'':'display:none;' ?>" onblur="mm_buildAndSubmitSimple();">
+              <input type="text" class="mm_sym" placeholder="e.g., BTC-USD, ^GSPC" value="<?= htmlspecialchars($sym) ?>" style="width:100%; <?= $isY?'':'display:none;' ?>">
             </div>
             <div>
               <div><b>Transforms (tick any)</b></div>
-              <label><input type="checkbox" class="mm_tf_log" <?= $has('log')?'checked':'' ?> onchange="mm_buildAndSubmitSimple();"> log</label>
-              <label><input type="checkbox" class="mm_tf_inv" <?= $has('inv')?'checked':'' ?> onchange="mm_buildAndSubmitSimple();"> inverse</label>
-              <label><input type="checkbox" class="mm_tf_z"   <?= $has('z')  ?'checked':'' ?> onchange="mm_zEn(this); mm_buildAndSubmitSimple();"> z</label>
-              win <input type="number" class="mm_zwin" value="<?= $zwin ?>" min="3" step="1" style="width:70px;" <?= $has('z')?'':'disabled' ?> oninput="mm_buildAndSubmitSimple();">
-              <label style="margin-left:10px;"><input type="checkbox" class="mm_tf_pct3"  <?= $has('pct3')?'checked':'' ?>  onchange="mm_buildAndSubmitSimple();"> pct3</label>
-              <label><input type="checkbox" class="mm_tf_pct6"  <?= $has('pct6')?'checked':'' ?>  onchange="mm_buildAndSubmitSimple();"> pct6</label>
-              <label><input type="checkbox" class="mm_tf_pct12" <?= $has('pct12')?'checked':'' ?> onchange="mm_buildAndSubmitSimple();"> pct12</label>
+              <label><input type="checkbox" class="mm_tf_log" <?= $has('log')?'checked':'' ?>> log</label>
+              <label><input type="checkbox" class="mm_tf_inv" <?= $has('inv')?'checked':'' ?>> inverse</label>
+              <label><input type="checkbox" class="mm_tf_z"   <?= $has('z')  ?'checked':'' ?> onchange="mm_zEn(this);"> z</label>
+              win <input type="number" class="mm_zwin" value="<?= $zwin ?>" min="3" step="1" style="width:70px;" <?= $has('z')?'':'disabled' ?>>
+              <label style="margin-left:10px;"><input type="checkbox" class="mm_tf_pct3"  <?= $has('pct3')?'checked':'' ?>> pct3</label>
+              <label><input type="checkbox" class="mm_tf_pct6"  <?= $has('pct6')?'checked':'' ?>> pct6</label>
+              <label><input type="checkbox" class="mm_tf_pct12" <?= $has('pct12')?'checked':'' ?>> pct12</label>
             </div>
             <div>
               <div><b>Legend label</b></div>
-              <input type="text" class="mm_lbl" placeholder="Optional" value="<?= htmlspecialchars($lbl) ?>" style="width:100%;" onblur="mm_buildAndSubmitSimple();">
+              <input type="text" class="mm_lbl" placeholder="Optional" value="<?= htmlspecialchars($lbl) ?>" style="width:100%;">
             </div>
             <div style="text-align:right;">
               <button type="button" onclick="this.closest('.rowcard').remove(); mm_buildAndSubmitSimple();">✕</button>
@@ -777,7 +784,7 @@ for ($i=0; $i<count($raw_maps); $i++) {
       </form>
     </div>
 
-    <div id="chart" style="width:100%;height:70vh;"></div>
+    <div id="chart" style="width:100%;height:500px;"></div>
   </div>
 
   <div class="card" style="margin-top:16px;">
@@ -838,32 +845,32 @@ const MM_DB_SERIES = <?= json_encode($MM_ASSETS, JSON_UNESCAPED_SLASHES) ?>;
 function mm_rowSimpleTpl(idx){
   const dbOpts = Object.entries(MM_DB_SERIES).map(([tbl,label])=>`<option value="${tbl}">${label}</option>`).join('');
   return `
-  <div class="rowcard" data-idx="\${idx}" style="display:grid;grid-template-columns:260px 220px 1fr 200px 60px;gap:10px;align-items:end;">
+  <div class="rowcard" data-idx="${idx}" style="display:grid;grid-template-columns:260px 220px 1fr 200px 60px;gap:10px;align-items:end;">
     <div>
       <div><b>Source</b></div>
-      <select class="mm_src" onchange="mm_toggleYahooSimple(this); mm_buildAndSubmitSimple();" style="width:100%;">
+      <select class="mm_src" onchange="mm_toggleYahooSimple(this);" style="width:100%;">
         <option value="" selected disabled>Choose…</option>
-        <optgroup label="DB tables">\${dbOpts}</optgroup>
+        <optgroup label="DB tables">${dbOpts}</optgroup>
         <optgroup label="Yahoo via RapidAPI"><option value="YAHOO">Type symbol below…</option></optgroup>
       </select>
     </div>
     <div>
       <div><b>Yahoo symbol</b></div>
-      <input type="text" class="mm_sym" placeholder="e.g., BTC-USD, ^GSPC" style="width:100%; display:none;" onblur="mm_buildAndSubmitSimple();">
+      <input type="text" class="mm_sym" placeholder="e.g., BTC-USD, ^GSPC" style="width:100%; display:none;">
     </div>
     <div>
       <div><b>Transforms (tick any)</b></div>
-      <label><input type="checkbox" class="mm_tf_log" onchange="mm_buildAndSubmitSimple();"> log</label>
-      <label><input type="checkbox" class="mm_tf_inv" onchange="mm_buildAndSubmitSimple();"> inverse</label>
-      <label><input type="checkbox" class="mm_tf_z" onchange="mm_zEn(this); mm_buildAndSubmitSimple();"> z</label>
-      win <input type="number" class="mm_zwin" value="36" min="3" step="1" style="width:70px;" disabled oninput="mm_buildAndSubmitSimple();">
-      <label style="margin-left:10px;"><input type="checkbox" class="mm_tf_pct3"  onchange="mm_buildAndSubmitSimple();"> pct3</label>
-      <label><input type="checkbox" class="mm_tf_pct6"  onchange="mm_buildAndSubmitSimple();"> pct6</label>
-      <label><input type="checkbox" class="mm_tf_pct12" onchange="mm_buildAndSubmitSimple();" checked> pct12</label>
+      <label><input type="checkbox" class="mm_tf_log"> log</label>
+      <label><input type="checkbox" class="mm_tf_inv"> inverse</label>
+      <label><input type="checkbox" class="mm_tf_z" onchange="mm_zEn(this);"> z</label>
+      win <input type="number" class="mm_zwin" value="36" min="3" step="1" style="width:70px;" disabled>
+      <label style="margin-left:10px;"><input type="checkbox" class="mm_tf_pct3"> pct3</label>
+      <label><input type="checkbox" class="mm_tf_pct6"> pct6</label>
+      <label><input type="checkbox" class="mm_tf_pct12" checked> pct12</label>
     </div>
     <div>
       <div><b>Legend label</b></div>
-      <input type="text" class="mm_lbl" placeholder="Optional" style="width:100%;" onblur="mm_buildAndSubmitSimple();">
+      <input type="text" class="mm_lbl" placeholder="Optional" style="width:100%;">
     </div>
     <div style="text-align:right;">
       <button type="button" onclick="this.closest('.rowcard').remove(); mm_buildAndSubmitSimple();">✕</button>
@@ -940,7 +947,7 @@ const gaugeData = [{
 }];
 const gaugeLayout = {
   paper_bgcolor:'#11161d', plot_bgcolor:'#11161d',
-  font:{color:'#e5e9f0'}, margin:{l:10,r:10,t:10,b:10}, height:140
+  font:{color:'#e5e9f0'}, margin:{l:10,r:10,t:10,b:10}, height:50
 };
 Plotly.newPlot('gauge', gaugeData, gaugeLayout, {displaylogo:false, responsive:true});
 </script>
