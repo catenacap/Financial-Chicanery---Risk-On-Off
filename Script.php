@@ -649,7 +649,7 @@ for ($i=0; $i<count($raw_maps); $i++) {
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <link href="https://fonts.googleapis.com/css?family=Nunito" rel="stylesheet" />
   <style>
-    body { background:#0b0f14; color:#e5e9f0; font-family: Nunito, system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, "Helvetica Neue", Arial, "Noto Sans"; margin:0; padding:16px; font-size: 12px;}
+    body { background:#0b0f14; color:#e5e9f0; font-family: Nunito, system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, "Helvetica Neue", Arial, "Noto Sans"; margin:0; padding:10px; font-size: 12px;}
     h2, h3{margin-top: 0; margin-bottom: 0px;}
     .card {background:#11161d; border:1px solid #1f2937; border-radius:12px; padding:16px; box-shadow: 0 4px 20px rgba(0,0,0,0.35);}
     .controls { margin-bottom: 12px; display:flex; gap:10px; flex-wrap:wrap; align-items:center;}
